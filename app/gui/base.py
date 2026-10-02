@@ -57,11 +57,13 @@ class GuiArchitect(ctk.CTk):
 
     def create_entry(self, placeholder_text="", master=None, **kwargs):
         parent = master or self.body
+        fg_color = kwargs.pop("fg_color", "#3a3a3a")
+        text_color = kwargs.pop("text_color", self.DEFAULT_TEXT_COLOR)
         entry = ctk.CTkEntry(
             parent,
             placeholder_text=placeholder_text,
-            fg_color="#3a3a3a",
-            text_color=self.DEFAULT_TEXT_COLOR,
+            fg_color=fg_color,
+            text_color=text_color,
             **kwargs,
         )
         self.widgets.append(entry)

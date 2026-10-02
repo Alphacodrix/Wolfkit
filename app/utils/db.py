@@ -228,6 +228,56 @@ def init_db():
 
     cursor.execute(
         """
+        CREATE TABLE IF NOT EXISTS reprobados (
+            id_reprobado INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_estudiante INTEGER NOT NULL UNIQUE,
+            id_semestre_periodo INTEGER NOT NULL,
+            nota_previa REAL DEFAULT 0.0,
+            fecha_registro TEXT,
+            evaluado INTEGER DEFAULT 0,
+            num_contenidos INTEGER DEFAULT 0,
+            FOREIGN KEY (id_estudiante) REFERENCES estudiantes(id_estudiantes),
+            FOREIGN KEY (id_semestre_periodo) REFERENCES semestre_periodo(id_SemestrePeriodo)
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reprobados_notas (
+            id_rep_nota INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_estudiante INTEGER NOT NULL,
+            num_contenido INTEGER NOT NULL,
+            nota REAL NOT NULL DEFAULT 0.0,
+            comentarios TEXT,
+            UNIQUE(id_estudiante, num_contenido)
+        )
+        """
+    )
+
+    cursor.execute("PRAGMA table_info(reprobados_notas)")
+    rn_cols = [r[1] for r in cursor.fetchall()]
+    if "comentarios" not in rn_cols:
+        try:
+            cursor.execute("ALTER TABLE reprobados_notas ADD COLUMN comentarios TEXT")
+        except Exception:
+            pass
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reprobados_contenidos (
+            id_contenido INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_semestre_periodo INTEGER NOT NULL,
+            num_contenido INTEGER NOT NULL,
+            nombre_contenido TEXT NOT NULL,
+            contexto TEXT,
+            UNIQUE(id_semestre_periodo, num_contenido)
+        )
+        """
+    )
+
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS servidores (
             id_servidor INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL UNIQUE,
@@ -437,18 +487,30 @@ def select_semesters():
     return rows
 
 
-def select_students():
+def select_students(include_reprobados: bool = False):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT e.id_estudiantes, e.nombres, e.apellidos, e.ci,
-               s.numero_semestre, s.numero_periodo
-        FROM estudiantes e
-        JOIN semestre_periodo s ON e.semestre_periodo = s.id_SemestrePeriodo
-        ORDER BY e.apellidos, e.nombres
-        """
-    )
+    if include_reprobados:
+        cursor.execute(
+            """
+            SELECT e.id_estudiantes, e.nombres, e.apellidos, e.ci,
+                   s.numero_semestre, s.numero_periodo, e.semestre_periodo
+            FROM estudiantes e
+            JOIN semestre_periodo s ON e.semestre_periodo = s.id_SemestrePeriodo
+            ORDER BY e.apellidos, e.nombres
+            """
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT e.id_estudiantes, e.nombres, e.apellidos, e.ci,
+                   s.numero_semestre, s.numero_periodo, e.semestre_periodo
+            FROM estudiantes e
+            JOIN semestre_periodo s ON e.semestre_periodo = s.id_SemestrePeriodo
+            WHERE e.id_estudiantes NOT IN (SELECT id_estudiante FROM reprobados)
+            ORDER BY e.apellidos, e.nombres
+            """
+        )
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -540,6 +602,8 @@ def delete_student(student_id: int):
     cursor = conn.cursor()
     cursor.execute("DELETE FROM asistencia_estudiantes WHERE id_estudiante = ?", (student_id,))
     cursor.execute("DELETE FROM notas WHERE id_estudiante = ?", (student_id,))
+    cursor.execute("DELETE FROM reprobados WHERE id_estudiante = ?", (student_id,))
+    cursor.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ?", (student_id,))
     cursor.execute("DELETE FROM estudiantes WHERE id_estudiantes = ?", (student_id,))
     conn.commit()
     conn.close()
@@ -550,6 +614,8 @@ def delete_all_students():
     cursor = conn.cursor()
     cursor.execute("DELETE FROM asistencia_estudiantes")
     cursor.execute("DELETE FROM notas")
+    cursor.execute("DELETE FROM reprobados")
+    cursor.execute("DELETE FROM reprobados_notas")
     cursor.execute("DELETE FROM estudiantes")
     conn.commit()
     conn.close()
@@ -976,3 +1042,239 @@ def update_acp_pago(id_pago: int, cantidad_pagada: float, cantidad_ves: float = 
     )
     conn.commit()
     conn.close()
+
+
+def select_reprobados():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT r.id_reprobado, r.id_estudiante, e.nombres, e.apellidos, e.ci,
+               r.id_semestre_periodo, s.numero_semestre, s.numero_periodo,
+               r.nota_previa, r.fecha_registro, r.evaluado, r.num_contenidos
+        FROM reprobados r
+        JOIN estudiantes e ON r.id_estudiante = e.id_estudiantes
+        JOIN semestre_periodo s ON r.id_semestre_periodo = s.id_SemestrePeriodo
+        ORDER BY s.numero_semestre, s.numero_periodo, e.apellidos, e.nombres
+        """
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def insert_or_update_reprobado(id_estudiante: int, id_semestre_periodo: int, nota_previa: float = 0.0):
+    from datetime import date
+    conn = get_connection()
+    cursor = conn.cursor()
+    today_str = date.today().isoformat()
+    cursor.execute(
+        """
+        INSERT INTO reprobados (id_estudiante, id_semestre_periodo, nota_previa, fecha_registro, evaluado, num_contenidos)
+        VALUES (?, ?, ?, ?, 0, 0)
+        ON CONFLICT(id_estudiante) DO UPDATE SET
+            id_semestre_periodo = excluded.id_semestre_periodo,
+            nota_previa = excluded.nota_previa,
+            fecha_registro = excluded.fecha_registro
+        """,
+        (id_estudiante, id_semestre_periodo, round(float(nota_previa), 2), today_str)
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_reprobado(id_estudiante: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM reprobados WHERE id_estudiante = ?", (id_estudiante,))
+    cursor.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ?", (id_estudiante,))
+    conn.commit()
+    conn.close()
+
+
+def delete_reprobados_permanently(student_ids: list):
+    conn = get_connection()
+    cursor = conn.cursor()
+    for sid in student_ids:
+        cursor.execute("DELETE FROM reprobados WHERE id_estudiante = ?", (sid,))
+        cursor.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ?", (sid,))
+        cursor.execute("DELETE FROM notas WHERE id_estudiante = ?", (sid,))
+        cursor.execute("DELETE FROM asistencia_estudiantes WHERE id_estudiante = ?", (sid,))
+        cursor.execute("DELETE FROM estudiantes WHERE id_estudiantes = ?", (sid,))
+    conn.commit()
+    conn.close()
+
+
+def save_reprobado_grade(id_estudiante: int, num_contenido: int, nota: float, comentarios: str = ""):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO reprobados_notas (id_estudiante, num_contenido, nota, comentarios)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(id_estudiante, num_contenido) DO UPDATE SET
+            nota = excluded.nota,
+            comentarios = excluded.comentarios
+        """,
+        (id_estudiante, num_contenido, round(float(nota), 2), comentarios.strip() if comentarios else "")
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_reprobado_grades(id_estudiante: int) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT num_contenido, nota, comentarios FROM reprobados_notas WHERE id_estudiante = ?", (id_estudiante,))
+    rows = cursor.fetchall()
+    conn.close()
+    return {row["num_contenido"]: {"nota": row["nota"], "comentarios": row["comentarios"] or ""} for row in rows}
+
+
+def delete_reprobado_single_grade(id_estudiante: int, num_contenido: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ? AND num_contenido = ?", (id_estudiante, num_contenido))
+    conn.commit()
+    conn.close()
+
+
+def get_reprobados_contenidos(id_semestre_periodo: int) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(num_contenidos) FROM reprobados WHERE id_semestre_periodo = ?", (id_semestre_periodo,))
+    max_cont_row = cursor.fetchone()
+    max_cont = max_cont_row[0] if max_cont_row and max_cont_row[0] else 0
+    if max_cont > 0:
+        for c_idx in range(1, max_cont + 1):
+            cursor.execute(
+                """
+                INSERT INTO reprobados_contenidos (id_semestre_periodo, num_contenido, nombre_contenido, contexto)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id_semestre_periodo, num_contenido) DO NOTHING
+                """,
+                (id_semestre_periodo, c_idx, f"Contenido {c_idx}", f"Evaluación de recuperación para el Contenido {c_idx}.")
+            )
+        conn.commit()
+
+    cursor.execute(
+        "SELECT id_rep_cont AS id_contenido, id_semestre_periodo, num_contenido, nombre_contenido, contexto "
+        "FROM reprobados_contenidos WHERE id_semestre_periodo = ? ORDER BY num_contenido ASC",
+        (id_semestre_periodo,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def update_reprobado_contenido(id_semestre_periodo: int, num_contenido: int, nombre: str, contexto: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO reprobados_contenidos (id_semestre_periodo, num_contenido, nombre_contenido, contexto)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(id_semestre_periodo, num_contenido) DO UPDATE SET
+            nombre_contenido = excluded.nombre_contenido,
+            contexto = excluded.contexto
+        """,
+        (id_semestre_periodo, num_contenido, nombre.strip(), contexto.strip())
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_reprobado_evaluation_contents(id_semestre_periodo: int, num_contenidos: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE reprobados SET num_contenidos = ?, evaluado = 1 WHERE id_semestre_periodo = ?",
+        (num_contenidos, id_semestre_periodo)
+    )
+    for c_idx in range(1, num_contenidos + 1):
+        cursor.execute(
+            """
+            INSERT INTO reprobados_contenidos (id_semestre_periodo, num_contenido, nombre_contenido, contexto)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id_semestre_periodo, num_contenido) DO NOTHING
+            """,
+            (id_semestre_periodo, c_idx, f"Contenido {c_idx}", f"Evaluación de recuperación para el Contenido {c_idx}.")
+        )
+    cursor.execute(
+        "DELETE FROM reprobados_contenidos WHERE id_semestre_periodo = ? AND num_contenido > ?",
+        (id_semestre_periodo, num_contenidos)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_or_create_next_semester(current_semestre_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (current_semestre_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return current_semestre_id
+
+    sem_str = str(row["numero_semestre"]).strip()
+    per_str = str(row["numero_periodo"]).strip()
+
+    try:
+        if "." in sem_str:
+            parts = sem_str.split(".")
+            sem_num = int(parts[0])
+            per_num = int(parts[1])
+        else:
+            sem_num = int(float(sem_str))
+            per_num = int(float(per_str))
+    except (ValueError, IndexError):
+        sem_num = 1
+        per_num = 1
+
+    if per_num < 3:
+        next_sem = str(sem_num)
+        next_per = str(per_num + 1)
+    else:
+        next_sem = str(sem_num + 1)
+        next_per = "1"
+
+    cursor.execute(
+        "SELECT id_SemestrePeriodo FROM semestre_periodo WHERE numero_semestre = ? AND numero_periodo = ?",
+        (next_sem, next_per)
+    )
+    next_row = cursor.fetchone()
+    if next_row:
+        next_id = next_row["id_SemestrePeriodo"]
+    else:
+        cursor.execute(
+            "INSERT INTO semestre_periodo (numero_semestre, numero_periodo) VALUES (?, ?)",
+            (next_sem, next_per)
+        )
+        conn.commit()
+        next_id = cursor.lastrowid
+
+    conn.close()
+    return next_id
+
+
+def promote_student(student_id: int, next_semester_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE estudiantes SET semestre_periodo = ? WHERE id_estudiantes = ?", (next_semester_id, student_id))
+    cursor.execute("DELETE FROM notas WHERE id_estudiante = ?", (student_id,))
+    cursor.execute("DELETE FROM reprobados WHERE id_estudiante = ?", (student_id,))
+    cursor.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ?", (student_id,))
+    conn.commit()
+    conn.close()
+
+
+def repeat_student_semester(student_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM notas WHERE id_estudiante = ?", (student_id,))
+    cursor.execute("DELETE FROM reprobados WHERE id_estudiante = ?", (student_id,))
+    cursor.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ?", (student_id,))
+    conn.commit()
+    conn.close()
+

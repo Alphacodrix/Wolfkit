@@ -97,7 +97,22 @@ class NotasMixin:
             height=34,
             corner_radius=10,
         )
-        self.btn_generate_report.pack(side="left")
+        self.btn_generate_report.pack(side="left", padx=(0, 8))
+
+        # Global Promote Button (Subir de semestre)
+        self.btn_promote_semester = self.create_button(
+            "🚀  SUBIR DE SEMESTRE",
+            command=self.promote_students_global,
+            master=controls_f,
+            font=("Arial", 11, "bold"),
+            fg_color="#6c5ce7",
+            hover_color="#5b4bc4",
+            text_color="#ffffff",
+            width=175,
+            height=34,
+            corner_radius=10,
+        )
+        self.btn_promote_semester.pack(side="left")
 
         # ── BODY PANEL ──────────────────────────────────────────────────────
         body_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -258,24 +273,250 @@ class NotasMixin:
         if not semester_id:
             return 0.0, 0
         units = select_units(semester_id)
-        if not units:
-            return 0.0, 0
-        
         notes = select_notes(student_id, semester_id)
-        sum_grades = 0.0
-        graded_count = 0
-        for u in units:
-            note_row = next((n for n in notes if n["unidad"] == u["nombre_unidad"]), None)
-            if note_row:
+        if units:
+            sum_grades = 0.0
+            graded_count = 0
+            for u in units:
+                note_row = next((n for n in notes if n["unidad"] == u["nombre_unidad"]), None)
+                if note_row:
+                    try:
+                        val = float(str(note_row["nota"]).replace(",", "."))
+                        sum_grades += val
+                        graded_count += 1
+                    except (ValueError, TypeError):
+                        pass
+            average = sum_grades / len(units) if len(units) > 0 else 0.0
+            return round(average, 2), len(units)
+        elif notes:
+            sum_grades = 0.0
+            for n in notes:
                 try:
-                    val = float(note_row["nota"].replace(",", "."))
-                    sum_grades += val
-                    graded_count += 1
+                    sum_grades += float(str(n["nota"]).replace(",", "."))
                 except (ValueError, TypeError):
                     pass
-        # Promedio definitivo = suma de notas dividido entre el número total de unidades
-        average = sum_grades / len(units) if len(units) > 0 else 0.0
-        return average, len(units)
+            average = sum_grades / len(notes) if len(notes) > 0 else 0.0
+            return round(average, 2), len(notes)
+        return 0.0, 0
+
+    def promote_students_global(self):
+        students = select_students()
+        if not students:
+            messagebox.showinfo("Subir de Semestre", "No hay estudiantes activos registrados en el sistema.")
+            return
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT semestre_periodo FROM estudiantes WHERE id_estudiantes NOT IN (SELECT id_estudiante FROM reprobados)")
+        active_sem_ids = [r[0] for r in c.fetchall() if r[0] is not None]
+
+        semesters_incomplete = []
+        for sem_id in active_sem_ids:
+            c.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (sem_id,))
+            sem_row = c.fetchone()
+            sem_label = f"{sem_row['numero_semestre']}.{sem_row['numero_periodo']}" if sem_row else f"ID {sem_id}"
+
+            c.execute("SELECT id_unidad, nombre_unidad, completada FROM unidades WHERE id_semestre_periodo = ?", (sem_id,))
+            units = c.fetchall()
+
+            if not units:
+                semesters_incomplete.append((sem_label, "No tiene unidades registradas"))
+            else:
+                not_completed = [u for u in units if not u["completada"] or int(u["completada"]) != 1]
+                if not_completed:
+                    semesters_incomplete.append((sem_label, f"{len(not_completed)} de {len(units)} unidades sin completar"))
+
+        if semesters_incomplete:
+            conn.close()
+            detail_str = "\n".join([f"• Semestre {lbl}: {reason}" for lbl, reason in semesters_incomplete])
+            messagebox.showwarning(
+                "Semestres No Culminados",
+                "No se puede realizar el avance de semestre global:\n\n"
+                "El sistema detectó que los siguientes semestres activos aún no han culminado o tienen unidades pendientes:\n\n"
+                f"{detail_str}\n\n"
+                "Para poder subir de semestre o determinar reprobados, cada semestre debe tener unidades y todas deben estar marcadas como 'Completadas'."
+            )
+            return
+
+        confirm = messagebox.askyesno(
+            "Subir de Semestre - Proceso Global",
+            "Todas las unidades de los semestres activos han sido completadas.\n\n"
+            "¿Deseas iniciar el cierre y avance de ciclo global?\n\n"
+            "• Los estudiantes con calificación definitiva ≥ 12 serán PROMOVIDOS al siguiente ciclo.\n"
+            "• Los estudiantes con calificación definitiva ≤ 11 NO subirán y serán registrados en la sección 'REPROBADOS'.\n"
+            "• Todas las calificaciones y unidades del ciclo actual se limpiarán para que los alumnos inicien limpios el nuevo semestre.\n\n"
+            "¿Continuar?"
+        )
+        if not confirm:
+            conn.close()
+            return
+
+        promoted = 0
+        reprobados_added = 0
+
+        c.execute("SELECT id_estudiantes, semestre_periodo, nombres, apellidos FROM estudiantes WHERE id_estudiantes NOT IN (SELECT id_estudiante FROM reprobados)")
+        all_students = c.fetchall()
+
+        for st in all_students:
+            s_id = st["id_estudiantes"]
+            sem_id = st["semestre_periodo"]
+            grade, _ = self.get_student_definitive_grade(s_id, sem_id)
+
+            if grade >= 12.0:
+                next_sem_id = get_or_create_next_semester(sem_id)
+                c.execute("UPDATE estudiantes SET semestre_periodo = ? WHERE id_estudiantes = ?", (next_sem_id, s_id))
+                c.execute("DELETE FROM reprobados WHERE id_estudiante = ?", (s_id,))
+                c.execute("DELETE FROM reprobados_notas WHERE id_estudiante = ?", (s_id,))
+                promoted += 1
+            else:
+                insert_or_update_reprobado(s_id, sem_id, grade)
+                reprobados_added += 1
+
+        # Limpiar notas y unidades globalmente para que los alumnos estén limpios para el nuevo ciclo
+        c.execute("DELETE FROM notas")
+        c.execute("DELETE FROM unidades")
+        conn.commit()
+        conn.close()
+
+        if hasattr(self, "update_reprobados_sidebar"):
+            self.update_reprobados_sidebar()
+        if hasattr(self, "refresh_notes_filters"):
+            self.refresh_notes_filters()
+        self.refresh_notes_student_menu()
+        if hasattr(self, "refresh_units_filters"):
+            self.refresh_units_filters()
+        if hasattr(self, "refresh_units_list"):
+            self.refresh_units_list()
+        try:
+            self.refresh_note_units_menu()
+        except Exception:
+            pass
+        if hasattr(self, "refresh_student_list"):
+            self.refresh_student_list()
+        if hasattr(self, "refresh_student_menu"):
+            self.refresh_student_menu()
+        if hasattr(self, "_refresh_dashboard"):
+            self._refresh_dashboard()
+
+        if reprobados_added > 0:
+            if hasattr(self, "tabview"):
+                self.tabview.set("Reprobados")
+            if hasattr(self, "refresh_reprobados_tab"):
+                self.refresh_reprobados_tab()
+            messagebox.showinfo(
+                "Proceso Completado",
+                f"Avance de ciclo finalizado:\n\n"
+                f"✓ {promoted} estudiante(s) promovido(s) al siguiente semestre.\n"
+                f"⚠ {reprobados_added} estudiante(s) con promedio ≤ 11 enviados a 'REPROBADOS'.\n"
+                f"🧹 Se han limpiado las notas y unidades anteriores para el nuevo ciclo.\n\n"
+                f"Se ha abierto la sección 'Reprobados' para su evaluación y regularización."
+            )
+        else:
+            messagebox.showinfo(
+                "Proceso Completado",
+                f"¡Todos los {promoted} estudiantes aprobaron con ≥ 12 y fueron promovidos exitosamente!\n"
+                f"🧹 Notas y unidades limpiadas para el nuevo ciclo."
+            )
+
+
+    def manual_reprobar_student(self):
+        if not hasattr(self, 'selected_note_student_id') or not self.selected_note_student_id:
+            messagebox.showwarning("Reprobar Estudiante", "Selecciona primero un estudiante para reprobar.")
+            return
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT id_estudiantes, nombres, apellidos, ci, semestre_periodo FROM estudiantes WHERE id_estudiantes = ?", (self.selected_note_student_id,))
+        student = c.fetchone()
+        if not student:
+            conn.close()
+            messagebox.showwarning("Reprobar Estudiante", "No se encontró el estudiante en el sistema.")
+            return
+
+        sem_id = student["semestre_periodo"]
+        c.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (sem_id,))
+        sem_row = c.fetchone()
+        sem_label = f"{sem_row['numero_semestre']}.{sem_row['numero_periodo']}" if sem_row else f"ID {sem_id}"
+
+        # 1. Verificar si la sección tiene contenidos / unidades
+        c.execute("SELECT id_unidad, nombre_unidad, completada FROM unidades WHERE id_semestre_periodo = ?", (sem_id,))
+        units = c.fetchall()
+
+        if not units:
+            conn.close()
+            messagebox.showwarning(
+                "No se puede reprobar",
+                f"No se puede reprobar al estudiante {student['nombres']} {student['apellidos']}:\n\n"
+                f"• Motivo: El Semestre {sem_label} no tiene unidades o contenidos agregados.\n\n"
+                "Para poder reprobar a un estudiante, todos los contenidos de su semestre deben estar creados y marcados como 'Completadas'."
+            )
+            return
+
+        # 2. Verificar que TODOS los contenidos / unidades del semestre estén completados
+        incomplete_units = [u for u in units if not u["completada"] or int(u["completada"]) != 1]
+        if incomplete_units:
+            conn.close()
+            messagebox.showwarning(
+                "No se puede reprobar",
+                f"No se puede reprobar al estudiante {student['nombres']} {student['apellidos']}:\n\n"
+                f"• Motivo: El Semestre {sem_label} aún tiene {len(incomplete_units)} de {len(units)} unidades sin completar.\n\n"
+                "El semestre aún no ha culminado. Para enviar al estudiante a reprobados, todas las unidades de esta sección deben haber sido marcadas como 'Completadas'."
+            )
+            return
+
+        # 3. Verificar calificación definitiva (debe ser <= 11)
+        grade, _ = self.get_student_definitive_grade(self.selected_note_student_id, sem_id)
+        if grade > 11.0:
+            conn.close()
+            messagebox.showwarning(
+                "No se puede reprobar",
+                f"No se puede reprobar al estudiante {student['nombres']} {student['apellidos']}:\n\n"
+                f"• Motivo: Su calificación definitiva es {grade:.2f} (mayor a 11).\n\n"
+                "El estudiante tiene calificación aprobatoria (≥ 12) o superior a 11. Solo se permite reprobar a estudiantes cuya definitiva sea menor o igual a 11 (≤ 11)."
+            )
+            return
+
+        # 4. Confirmación del proceso manual 1 a 1
+        confirm = messagebox.askyesno(
+            "Confirmar Proceso Manual de Reprobación",
+            f"¿Estás seguro de reprobar a este estudiante?\n\n"
+            f"• Estudiante: {student['nombres']} {student['apellidos']} (CI: {student['ci']})\n"
+            f"• Semestre: {sem_label}\n"
+            f"• Calificación Definitiva: {grade:.2f}\n\n"
+            f"El estudiante saldrá de las listas normales de alumnos y entrará al 'limbo', quedando registrado únicamente en la sección especial de 'REPROBADOS'.\n\n"
+            f"¿Proceder?",
+            icon="warning"
+        )
+        if not confirm:
+            conn.close()
+            return
+
+        # Enviar al limbo de reprobados
+        insert_or_update_reprobado(self.selected_note_student_id, sem_id, grade)
+        conn.commit()
+        conn.close()
+
+        student_name = f"{student['nombres']} {student['apellidos']}"
+        self.selected_note_student_id = None
+
+        if hasattr(self, "update_reprobados_sidebar"):
+            self.update_reprobados_sidebar()
+        self.refresh_notes_student_menu()
+        self.refresh_notes_list()
+        if hasattr(self, "refresh_student_list"):
+            self.refresh_student_list()
+        if hasattr(self, "refresh_student_menu"):
+            self.refresh_student_menu()
+        if hasattr(self, "refresh_reprobados_tab"):
+            self.refresh_reprobados_tab()
+        if hasattr(self, "_refresh_dashboard"):
+            self._refresh_dashboard()
+
+        messagebox.showinfo(
+            "Estudiante Reprobado",
+            f"El estudiante {student_name} ha sido reprobado manualmente con éxito.\n\n"
+            f"Ahora se encuentra en el limbo (exclusivamente en la sección 'REPROBADOS')."
+        )
 
 
     def select_student_for_notes(self, student_id):
@@ -425,8 +666,8 @@ class NotasMixin:
             student_id = student["id_estudiantes"]
             avg, _ = self.get_student_definitive_grade(student_id, semester_id)
             
-            # Colores del badge según promedio
-            if avg >= 9.5: # Nota aprobatoria estándar
+            # Colores del badge según promedio (≥ 12 aprobatorio)
+            if avg >= 12.0:
                 badge_bg = "#0f3a20"
                 badge_fg = "#00e676"
             elif avg > 0:
@@ -577,11 +818,11 @@ class NotasMixin:
 
         # Nota definitiva en cabecera
         avg, _ = self.get_student_definitive_grade(self.selected_note_student_id, semester_id)
-        avg_badge_bg = "#0f3a20" if avg >= 9.5 else ("#3d1e1e" if avg > 0 else "#1c1e2f")
-        avg_badge_fg = "#00e676" if avg >= 9.5 else ("#ff4757" if avg > 0 else "#8c8da5")
+        avg_badge_bg = "#0f3a20" if avg >= 12.0 else ("#3d1e1e" if avg > 0 else "#1c1e2f")
+        avg_badge_fg = "#00e676" if avg >= 12.0 else ("#ff4757" if avg > 0 else "#8c8da5")
         
         badge_header = ctk.CTkFrame(header_card, fg_color=avg_badge_bg, corner_radius=8, height=36, width=70)
-        badge_header.pack(side="right", padx=16, pady=12)
+        badge_header.pack(side="right", padx=(0, 16), pady=12)
         badge_header.pack_propagate(False)
         
         ctk.CTkLabel(
@@ -590,6 +831,21 @@ class NotasMixin:
             font=("Arial", 12, "bold"),
             text_color=avg_badge_fg
         ).pack(fill="both", expand=True)
+
+        # Botón manual de reprobación individual (proceso 1 a 1)
+        btn_reprobar = ctk.CTkButton(
+            header_card,
+            text="⚠  REPROBAR",
+            command=self.manual_reprobar_student,
+            fg_color="#8a2424",
+            hover_color="#a33030",
+            text_color="#ffffff",
+            font=("Arial", 11, "bold"),
+            width=115,
+            height=34,
+            corner_radius=8,
+        )
+        btn_reprobar.pack(side="right", padx=(0, 12), pady=12)
 
         # ── LISTA DE CALIFICACIONES POR UNIDAD ─────────────────────────────────
         grades_scroll = ctk.CTkScrollableFrame(self.notes_detail_container, fg_color="transparent", height=190)

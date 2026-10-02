@@ -54,6 +54,19 @@ from ..utils.db import (
     get_user_profile_pic,
     update_user_credentials,
     get_user_credentials,
+    select_reprobados,
+    insert_or_update_reprobado,
+    delete_reprobado,
+    delete_reprobados_permanently,
+    save_reprobado_grade,
+    get_reprobado_grades,
+    delete_reprobado_single_grade,
+    get_reprobados_contenidos,
+    update_reprobado_contenido,
+    set_reprobado_evaluation_contents,
+    get_or_create_next_semester,
+    promote_student,
+    repeat_student_semester,
 )
 
 
@@ -105,21 +118,56 @@ class SidebarTabView:
         self.groups = {}    # name -> dict
 
         self._build_sidebar_header()
+        self.nav_scroll = ctk.CTkScrollableFrame(
+            self.sidebar_parent,
+            fg_color="transparent",
+            scrollbar_button_color="#2c2e4a",
+            scrollbar_button_hover_color="#0fbcf9",
+            scrollbar_fg_color="transparent"
+        )
+        self.nav_scroll.pack(fill="both", expand=True, padx=2, pady=(0, 6))
+        self._setup_mousewheel_scroll()
+
+    def _setup_mousewheel_scroll(self):
+        def _on_wheel(event):
+            if hasattr(self.nav_scroll, "_canvas") and self.nav_scroll._canvas.winfo_exists():
+                try:
+                    delta = int(-1 * (event.delta / 120))
+                    self.nav_scroll._canvas.yview_scroll(delta, "units")
+                except Exception:
+                    pass
+
+        def _bind_to_all(event=None):
+            try:
+                self.sidebar_parent.bind_all("<MouseWheel>", _on_wheel)
+            except Exception:
+                pass
+
+        def _unbind_from_all(event=None):
+            try:
+                self.sidebar_parent.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+
+        self.sidebar_parent.bind("<Enter>", _bind_to_all, add="+")
+        self.sidebar_parent.bind("<Leave>", _unbind_from_all, add="+")
+        self.nav_scroll.bind("<Enter>", _bind_to_all, add="+")
+        self.nav_scroll.bind("<Leave>", _unbind_from_all, add="+")
 
     def _build_sidebar_header(self):
         # 1. Profile Avatar Canvas with pointer cursor
-        self.avatar_canvas = tk.Canvas(self.sidebar_parent, width=110, height=110, bg="#1b1c2b", highlightthickness=0, cursor="hand2")
-        self.avatar_canvas.pack(pady=(25, 8))
+        self.avatar_canvas = tk.Canvas(self.sidebar_parent, width=75, height=75, bg="#1b1c2b", highlightthickness=0, cursor="hand2")
+        self.avatar_canvas.pack(pady=(12, 4))
 
         # 2. Username label with pointer cursor
         self.username_label = ctk.CTkLabel(
             self.sidebar_parent,
             text="",
-            font=("Arial", 14, "bold"),
+            font=("Arial", 12, "bold"),
             text_color="#ffffff",
             cursor="hand2"
         )
-        self.username_label.pack(pady=(0, 15))
+        self.username_label.pack(pady=(0, 8))
 
         # Bind clicks
         self.avatar_canvas.bind("<Button-1>", lambda event: self.app_instance.open_user_settings())
@@ -137,9 +185,9 @@ class SidebarTabView:
             text_color="#ffffff",
             border_color="#2c2e3e",
             corner_radius=8,
-            height=32
+            height=28
         )
-        self.search_entry.pack(fill="x", padx=16, pady=(0, 20))
+        self.search_entry.pack(fill="x", padx=12, pady=(0, 10))
 
     def refresh_avatar(self):
         if not self.avatar_canvas.winfo_exists():
@@ -151,19 +199,19 @@ class SidebarTabView:
         if img_bytes and Image is not None:
             try:
                 pil_img = Image.open(io.BytesIO(img_bytes))
-                pil_img = pil_img.resize((80, 80), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
+                pil_img = pil_img.resize((60, 60), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
                 
                 # Apply circular mask
-                mask = Image.new("L", (80, 80), 0)
+                mask = Image.new("L", (60, 60), 0)
                 draw = ImageDraw.Draw(mask)
-                draw.ellipse((0, 0, 80, 80), fill=255)
+                draw.ellipse((0, 0, 60, 60), fill=255)
                 
-                circular_img = Image.new("RGBA", (80, 80), (0,0,0,0))
+                circular_img = Image.new("RGBA", (60, 60), (0,0,0,0))
                 circular_img.paste(pil_img, (0, 0), mask=mask)
                 
                 self.photo_image = ImageTk.PhotoImage(circular_img)
-                self.avatar_canvas.create_image(55, 55, image=self.photo_image)
-                self.avatar_canvas.create_oval(15, 15, 95, 95, outline="#ffffff", width=2)
+                self.avatar_canvas.create_image(37, 37, image=self.photo_image)
+                self.avatar_canvas.create_oval(8, 8, 67, 67, outline="#ffffff", width=2)
             except Exception:
                 self._draw_default_avatar()
         else:
@@ -173,19 +221,19 @@ class SidebarTabView:
         self.username_label.configure(text=username_text)
 
     def _draw_default_avatar(self):
-        self.avatar_canvas.create_oval(15, 15, 95, 95, outline="#ffffff", width=2)
-        self.avatar_canvas.create_oval(40, 30, 70, 60, fill="#ffffff", outline="")
-        self.avatar_canvas.create_arc(25, 65, 85, 125, start=0, extent=180, fill="#ffffff", outline="")
+        self.avatar_canvas.create_oval(8, 8, 67, 67, outline="#ffffff", width=2)
+        self.avatar_canvas.create_oval(26, 18, 49, 41, fill="#ffffff", outline="")
+        self.avatar_canvas.create_arc(16, 45, 59, 88, start=0, extent=180, fill="#ffffff", outline="")
 
     def add_group(self, name, icon_text):
         btn = ctk.CTkButton(
-            self.sidebar_parent,
+            self.nav_scroll,
             text=icon_text + "  ▼",
             anchor="w",
             fg_color="transparent",
             text_color="#ffffff",
             hover_color="#212338",
-            height=42,
+            height=36,
             corner_radius=8,
             font=("Arial", 11, "bold"),
             command=lambda g=name: self.toggle_group(g)
@@ -216,15 +264,24 @@ class SidebarTabView:
             if item_type == 'tab':
                 if name == "Alojamiento":
                     if self.active_tab in ["Servidor", "Alojamiento"]:
-                        self.buttons[name].pack(fill="x", padx=12, pady=4)
+                        self.buttons[name].pack(fill="x", padx=6, pady=2)
                 else:
-                    self.buttons[name].pack(fill="x", padx=12, pady=4)
+                    self.buttons[name].pack(fill="x", padx=6, pady=2)
             elif item_type == 'group':
                 group = self.groups[name]
-                group['button'].pack(fill="x", padx=12, pady=4)
+                group['button'].pack(fill="x", padx=6, pady=2)
                 if group['expanded']:
                     for item in group['items']:
-                        self.buttons[item].pack(fill="x", padx=12, pady=4)
+                        if item == "Reprobados":
+                            if getattr(self.app_instance, "has_reprobados", False):
+                                self.buttons[item].pack(fill="x", padx=6, pady=2)
+                        else:
+                            self.buttons[item].pack(fill="x", padx=6, pady=2)
+
+        try:
+            bind_mouse_wheel_recursive(self.nav_scroll, self.nav_scroll)
+        except Exception:
+            pass
 
     def add(self, name, group=None):
         frame = ctk.CTkFrame(self.parent, fg_color="transparent")
@@ -248,6 +305,8 @@ class SidebarTabView:
             icon_text = "☰  UNIDADES"
         elif name == "Administración":
             icon_text = "⚙  ADMIN"
+        elif name == "Reprobados":
+            icon_text = "⚠  REPROBADOS"
         else:
             icon_text = f"•  {name.upper()}"
 
@@ -255,13 +314,13 @@ class SidebarTabView:
             icon_text = "   " + icon_text
 
         btn = ctk.CTkButton(
-            self.sidebar_parent,
+            self.nav_scroll,
             text=icon_text,
             anchor="w",
             fg_color="transparent",
-            text_color="#8c8da5",
-            hover_color="#212338",
-            height=42,
+            text_color="#ff5e62" if name == "Reprobados" else "#8c8da5",
+            hover_color="#3d1825" if name == "Reprobados" else "#212338",
+            height=36,
             corner_radius=8,
             font=("Arial", 11, "bold"),
             command=lambda n=name: self.set(n)
@@ -291,9 +350,15 @@ class SidebarTabView:
         # Update button colors
         for tab_name, btn in self.buttons.items():
             if tab_name == name:
-                btn.configure(fg_color="#212338", text_color="#ffffff")
+                if name == "Reprobados":
+                    btn.configure(fg_color="#3d1825", text_color="#ff5e62")
+                else:
+                    btn.configure(fg_color="#212338", text_color="#ffffff")
             else:
-                btn.configure(fg_color="transparent", text_color="#8c8da5")
+                if tab_name == "Reprobados":
+                    btn.configure(fg_color="transparent", text_color="#ff5e62")
+                else:
+                    btn.configure(fg_color="transparent", text_color="#8c8da5")
 
         self.active_tab = name
         self._repack_buttons()
@@ -301,6 +366,8 @@ class SidebarTabView:
         # Refresh dashboard if entering Inicio
         if name == "Inicio" and hasattr(self.app_instance, "_refresh_dashboard"):
             self.app_instance._refresh_dashboard()
+        elif name == "Reprobados" and hasattr(self.app_instance, "refresh_reprobados_tab"):
+            self.app_instance.refresh_reprobados_tab()
 from .acp.frontend import ACPMixin
 
 class AttendanceApp(GuiArchitect, ACPMixin):
@@ -346,8 +413,16 @@ class AttendanceApp(GuiArchitect, ACPMixin):
         self.tabview.add("Estudiantes", group="Educación")
         self.tabview.add("Asistencia", group="Educación")
         self.tabview.add("Notas", group="Educación")
+        self.tabview.add("Reprobados", group="Educación")
         self.tabview.add("Unidades", group="Educación")
         self.tabview.add("Administración", group="Educación")
+
+        self.has_reprobados = False
+        self.selected_reprobado_sem_id = None
+        self.reprobados_num_contenidos = {}
+        self.reprobado_grade_entries = {}
+        self.reprobado_avg_labels = {}
+        self.reprobado_action_buttons = {}
 
         self._build_server_tab()
         self._build_alojamiento_tab()
@@ -358,6 +433,7 @@ class AttendanceApp(GuiArchitect, ACPMixin):
         self._build_units_tab()
         self._build_admin_tab()
         self._build_acp_tab()
+        self._build_reprobados_tab()
         self.refresh_semesters()
         self.refresh_attendance_filters()
         self.refresh_notes_filters()
@@ -374,6 +450,7 @@ class AttendanceApp(GuiArchitect, ACPMixin):
             pass
         self.refresh_delete_menu()
         self.tabview.set("Inicio")
+        self.update_reprobados_sidebar()
 
         # Safely shut down all background server processes on exit
         def on_app_close():
@@ -1276,7 +1353,22 @@ class AttendanceApp(GuiArchitect, ACPMixin):
             height=34,
             corner_radius=10,
         )
-        self.btn_generate_report.pack(side="left")
+        self.btn_generate_report.pack(side="left", padx=(0, 8))
+
+        # Global Promote Button (Subir de semestre)
+        self.btn_promote_semester = self.create_button(
+            "🚀  SUBIR DE SEMESTRE",
+            command=self.promote_students_global,
+            master=controls_f,
+            font=("Arial", 11, "bold"),
+            fg_color="#6c5ce7",
+            hover_color="#5b4bc4",
+            text_color="#ffffff",
+            width=175,
+            height=34,
+            corner_radius=10,
+        )
+        self.btn_promote_semester.pack(side="left")
 
         # ── BODY PANEL ──────────────────────────────────────────────────────
         body_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1325,115 +1417,116 @@ class AttendanceApp(GuiArchitect, ACPMixin):
 
     def _build_units_tab(self):
         tab = self.tabview.tab("Unidades")
+        tab.configure(fg_color="#0d0e1a")
         tab.grid_columnconfigure(0, weight=1)
         tab.grid_columnconfigure(1, weight=1)
 
-        units_frame = ctk.CTkFrame(tab, fg_color="#242424")
+        units_frame = ctk.CTkFrame(tab, fg_color="#12132a", corner_radius=12)
         units_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         units_frame.grid_columnconfigure(1, weight=1)
 
-        self.create_label("Gestión de unidades", master=units_frame, font=("Arial", 18, "bold")).grid(
+        self.create_label("Gestión de unidades", master=units_frame, font=("Arial", 18, "bold"), text_color="#0fbcf9").grid(
             row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(14, 10)
         )
 
-        self.create_label("Semestre:", master=units_frame).grid(row=1, column=0, sticky="w", padx=14, pady=(8, 4))
+        self.create_label("Semestre:", master=units_frame, text_color="#8c8da5").grid(row=1, column=0, sticky="w", padx=14, pady=(8, 4))
         self.units_semester_filter_var = tk.StringVar(value="")
         self.units_semester_filter_menu = ctk.CTkOptionMenu(
             units_frame,
             values=[],
             variable=self.units_semester_filter_var,
-            fg_color="#3a3a3a",
-            button_color="#444444",
+            fg_color="#1a1b30",
+            button_color="#2c2e4a",
             dynamic_resizing=False,
         )
         self.units_semester_filter_menu.grid(row=1, column=1, sticky="ew", padx=14, pady=(8, 4))
         self.units_semester_filter_var.trace_add("write", self._on_units_semester_changed)
 
-        self.create_label("Periodo:", master=units_frame).grid(row=2, column=0, sticky="w", padx=14, pady=(8, 4))
+        self.create_label("Periodo:", master=units_frame, text_color="#8c8da5").grid(row=2, column=0, sticky="w", padx=14, pady=(8, 4))
         self.units_period_filter_var = tk.StringVar(value="")
         self.units_period_filter_menu = ctk.CTkOptionMenu(
             units_frame,
             values=[],
             variable=self.units_period_filter_var,
-            fg_color="#3a3a3a",
-            button_color="#444444",
+            fg_color="#1a1b30",
+            button_color="#2c2e4a",
             dynamic_resizing=False,
         )
         self.units_period_filter_menu.grid(row=2, column=1, sticky="ew", padx=14, pady=(8, 4))
         self.units_period_filter_var.trace_add("write", self._on_units_period_changed)
 
-        self.create_label("Nombre de unidad:", master=units_frame).grid(row=3, column=0, sticky="w", padx=14, pady=(8, 4))
-        self.entry_unit_name = self.create_entry("Unidad", master=units_frame)
+        self.create_label("Nombre de unidad:", master=units_frame, text_color="#8c8da5").grid(row=3, column=0, sticky="w", padx=14, pady=(8, 4))
+        self.entry_unit_name = self.create_entry("Unidad", master=units_frame, fg_color="#1a1b30")
         self.entry_unit_name.grid(row=3, column=1, sticky="ew", padx=14, pady=(8, 4))
 
-        self.create_label("Contexto:", master=units_frame).grid(row=4, column=0, sticky="nw", padx=14, pady=(8, 4))
-        # area multi-line para contexto
-        self.entry_unit_context = ctk.CTkTextbox(units_frame, width=320, height=80)
+        self.create_label("Contexto:", master=units_frame, text_color="#8c8da5").grid(row=4, column=0, sticky="nw", padx=14, pady=(8, 4))
+        self.entry_unit_context = ctk.CTkTextbox(units_frame, width=320, height=80, fg_color="#1a1b30", text_color="#ffffff")
         self.entry_unit_context.grid(row=4, column=1, sticky="ew", padx=14, pady=(8, 4))
 
-        self.create_button("Agregar unidad", command=self.save_unit, master=units_frame).grid(
+        self.create_button("Agregar unidad", command=self.save_unit, master=units_frame, fg_color="#2c2e4a", hover_color="#212338").grid(
             row=5, column=0, columnspan=2, sticky="ew", padx=14, pady=(12, 4)
         )
 
         self.units_message_label = self.create_label("", master=units_frame, font=("Arial", 12))
         self.units_message_label.grid(row=6, column=0, columnspan=2, sticky="w", padx=14, pady=(4, 14))
 
-        units_list_frame = ctk.CTkFrame(tab, fg_color="#242424")
+        units_list_frame = ctk.CTkFrame(tab, fg_color="#12132a", corner_radius=12)
         units_list_frame.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
         units_list_frame.grid_columnconfigure(0, weight=1)
         units_list_frame.grid_rowconfigure(1, weight=1)
 
-        self.create_label("Unidades por semestre/periodo", master=units_list_frame, font=("Arial", 18, "bold")).grid(
+        self.create_label("Unidades por semestre/periodo", master=units_list_frame, font=("Arial", 18, "bold"), text_color="#ffffff").grid(
             row=0, column=0, sticky="w", padx=14, pady=(14, 10)
         )
 
-        self.units_list_frame = ctk.CTkScrollableFrame(units_list_frame, fg_color="#2c2c2c")
+        self.units_list_frame = ctk.CTkScrollableFrame(units_list_frame, fg_color="#1a1b30")
         self.units_list_frame.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
 
     def _build_admin_tab(self):
         tab = self.tabview.tab("Administración")
+        tab.configure(fg_color="#0d0e1a")
         tab.grid_columnconfigure(0, weight=1)
 
-        admin_frame = ctk.CTkFrame(tab, fg_color="#242424")
+        admin_frame = ctk.CTkFrame(tab, fg_color="#12132a", corner_radius=12)
         admin_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         admin_frame.grid_columnconfigure(1, weight=1)
 
-        self.create_label("Administración de estudiantes", master=admin_frame, font=("Arial", 18, "bold")).grid(
+        self.create_label("Administración de estudiantes", master=admin_frame, font=("Arial", 18, "bold"), text_color="#0fbcf9").grid(
             row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(14, 10)
         )
 
-        self.create_label("Semestre:", master=admin_frame).grid(row=1, column=0, sticky="w", padx=14, pady=(8, 4))
+        self.create_label("Semestre:", master=admin_frame, text_color="#8c8da5").grid(row=1, column=0, sticky="w", padx=14, pady=(8, 4))
         self.admin_semester_filter_var = tk.StringVar(value="")
         self.admin_semester_filter_menu = ctk.CTkOptionMenu(
             admin_frame,
             values=[],
             variable=self.admin_semester_filter_var,
-            fg_color="#3a3a3a",
-            button_color="#444444",
+            fg_color="#1a1b30",
+            button_color="#2c2e4a",
             dynamic_resizing=False,
         )
         self.admin_semester_filter_menu.grid(row=1, column=1, sticky="ew", padx=14, pady=(8, 4))
         self.admin_semester_filter_var.trace_add("write", lambda *args: self.on_admin_filter_semester_selected(self.admin_semester_filter_var.get()))
 
-        self.create_label("Periodo:", master=admin_frame).grid(row=2, column=0, sticky="w", padx=14, pady=(8, 4))
+        self.create_label("Periodo:", master=admin_frame, text_color="#8c8da5").grid(row=2, column=0, sticky="w", padx=14, pady=(8, 4))
         self.admin_period_filter_var = tk.StringVar(value="")
         self.admin_period_filter_menu = ctk.CTkOptionMenu(
             admin_frame,
             values=[],
             variable=self.admin_period_filter_var,
-            fg_color="#3a3a3a",
-            button_color="#444444",
+            fg_color="#1a1b30",
+            button_color="#2c2e4a",
             dynamic_resizing=False,
         )
         self.admin_period_filter_menu.grid(row=2, column=1, sticky="ew", padx=14, pady=(8, 4))
         self.admin_period_filter_var.trace_add("write", lambda *args: self.on_admin_filter_period_selected(self.admin_period_filter_var.get()))
 
-        self.create_label("Seleccionar estudiante:", master=admin_frame).grid(row=3, column=0, sticky="w", padx=14, pady=(8, 4))
+        self.create_label("Seleccionar estudiante:", master=admin_frame, text_color="#8c8da5").grid(row=3, column=0, sticky="w", padx=14, pady=(8, 4))
         self.delete_student_menu = ctk.CTkOptionMenu(
             admin_frame,
             values=["No hay estudiantes"],
-            fg_color="#3a3a3a",
-            button_color="#444444",
+            fg_color="#1a1b30",
+            button_color="#2c2e4a",
             dynamic_resizing=False,
         )
         self.delete_student_menu.grid(row=3, column=1, sticky="ew", padx=14, pady=(8, 4))
@@ -1449,11 +1542,11 @@ class AttendanceApp(GuiArchitect, ACPMixin):
         self.admin_message_label = self.create_label("", master=admin_frame, font=("Arial", 12))
         self.admin_message_label.grid(row=5, column=0, columnspan=2, sticky="w", padx=14, pady=(4, 8))
 
-        self.create_label("Estudiantes registrados", master=admin_frame, font=("Arial", 16, "bold")).grid(
+        self.create_label("Estudiantes registrados", master=admin_frame, font=("Arial", 16, "bold"), text_color="#ffffff").grid(
             row=7, column=0, columnspan=2, sticky="w", padx=14, pady=(10, 8)
         )
 
-        self.admin_students_list_frame = ctk.CTkScrollableFrame(admin_frame, fg_color="#2c2c2c", height=220)
+        self.admin_students_list_frame = ctk.CTkScrollableFrame(admin_frame, fg_color="#1a1b30", height=220)
         self.admin_students_list_frame.grid(row=8, column=0, columnspan=2, sticky="nsew", padx=14, pady=(0, 14))
         admin_frame.grid_rowconfigure(8, weight=1)
 
@@ -1982,24 +2075,1035 @@ class AttendanceApp(GuiArchitect, ACPMixin):
         if not semester_id:
             return 0.0, 0
         units = select_units(semester_id)
-        if not units:
-            return 0.0, 0
-        
         notes = select_notes(student_id, semester_id)
-        sum_grades = 0.0
-        graded_count = 0
-        for u in units:
-            note_row = next((n for n in notes if n["unidad"] == u["nombre_unidad"]), None)
-            if note_row:
+        if units:
+            sum_grades = 0.0
+            graded_count = 0
+            for u in units:
+                note_row = next((n for n in notes if n["unidad"] == u["nombre_unidad"]), None)
+                if note_row:
+                    try:
+                        val = float(str(note_row["nota"]).replace(",", "."))
+                        sum_grades += val
+                        graded_count += 1
+                    except (ValueError, TypeError):
+                        pass
+            average = sum_grades / len(units) if len(units) > 0 else 0.0
+            return round(average, 2), len(units)
+        elif notes:
+            sum_grades = 0.0
+            for n in notes:
                 try:
-                    val = float(note_row["nota"].replace(",", "."))
-                    sum_grades += val
-                    graded_count += 1
+                    sum_grades += float(str(n["nota"]).replace(",", "."))
                 except (ValueError, TypeError):
                     pass
-        # Promedio definitivo = suma de notas dividido entre el número total de unidades
-        average = sum_grades / len(units) if len(units) > 0 else 0.0
-        return average, len(units)
+            average = sum_grades / len(notes) if len(notes) > 0 else 0.0
+            return round(average, 2), len(notes)
+        return 0.0, 0
+
+    def promote_students_global(self):
+        students = select_students()
+        if not students:
+            messagebox.showinfo("Subir de Semestre", "No hay estudiantes activos registrados en el sistema.")
+            return
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT semestre_periodo FROM estudiantes WHERE id_estudiantes NOT IN (SELECT id_estudiante FROM reprobados)")
+        active_sem_ids = [r[0] for r in c.fetchall()]
+
+        semesters_incomplete = []
+        for sem_id in active_sem_ids:
+            c.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (sem_id,))
+            sem_row = c.fetchone()
+            sem_label = f"{sem_row['numero_semestre']}.{sem_row['numero_periodo']}" if sem_row else f"ID {sem_id}"
+
+            c.execute("SELECT id_unidad, nombre_unidad, completada FROM unidades WHERE id_semestre_periodo = ?", (sem_id,))
+            units = c.fetchall()
+
+            if not units:
+                semesters_incomplete.append((sem_label, "No tiene unidades registradas"))
+            else:
+                not_completed = [u for u in units if not u["completada"] or int(u["completada"]) != 1]
+                if not_completed:
+                    semesters_incomplete.append((sem_label, f"{len(not_completed)} de {len(units)} unidades sin completar"))
+
+        if semesters_incomplete:
+            conn.close()
+            detail_str = "\n".join([f"• Semestre {lbl}: {reason}" for lbl, reason in semesters_incomplete])
+            messagebox.showwarning(
+                "Semestres No Culminados",
+                "No se puede realizar el avance de semestre global:\n\n"
+                "El sistema detectó que los siguientes semestres activos aún no han completado todas sus unidades:\n\n"
+                f"{detail_str}\n\n"
+                "Para poder subir de semestre o determinar reprobados, todas las unidades de los semestres activos deben estar marcadas como 'Completadas'."
+            )
+            return
+
+        confirm = messagebox.askyesno(
+            "Subir de Semestre - Proceso Global",
+            "Todas las unidades de los semestres activos han sido completadas.\n\n"
+            "¿Deseas iniciar el cierre y avance de ciclo global?\n\n"
+            "• Los estudiantes con calificación definitiva ≥ 12 serán PROMOVIDOS al siguiente ciclo.\n"
+            "• Los estudiantes con calificación definitiva ≤ 11 NO subirán y serán registrados en la sección 'REPROBADOS'.\n"
+            "• Todas las calificaciones y unidades del ciclo actual se limpiarán para que los alumnos inicien limpios el nuevo semestre.\n\n"
+            "¿Continuar?"
+        )
+        if not confirm:
+            conn.close()
+            return
+
+        promoted = 0
+        reprobados_added = 0
+
+        c.execute("SELECT id_estudiantes, semestre_periodo, nombres, apellidos FROM estudiantes WHERE id_estudiantes NOT IN (SELECT id_estudiante FROM reprobados)")
+        all_students = c.fetchall()
+
+        for st in all_students:
+            s_id = st["id_estudiantes"]
+            sem_id = st["semestre_periodo"]
+            grade, _ = self.get_student_definitive_grade(s_id, sem_id)
+
+            if grade >= 12.0:
+                next_sem_id = get_or_create_next_semester(sem_id)
+                c.execute("UPDATE estudiantes SET semestre_periodo = ? WHERE id_estudiantes = ?", (next_sem_id, s_id))
+                promoted += 1
+            else:
+                insert_or_update_reprobado(s_id, sem_id, grade)
+                reprobados_added += 1
+
+        # Limpiar notas y unidades globalmente para que los alumnos estén limpios para el nuevo ciclo
+        c.execute("DELETE FROM notas")
+        c.execute("DELETE FROM unidades")
+        conn.commit()
+        conn.close()
+
+        self.update_reprobados_sidebar()
+        self.refresh_notes_filters()
+        self.refresh_notes_student_menu()
+        self.refresh_units_filters()
+        self.refresh_units_list()
+        try:
+            self.refresh_note_units_menu()
+        except Exception:
+            pass
+        self.refresh_student_list()
+        self.refresh_student_menu()
+        if hasattr(self, "_refresh_dashboard"):
+            self._refresh_dashboard()
+
+        if reprobados_added > 0:
+            self.tabview.set("Reprobados")
+            self.refresh_reprobados_tab()
+            messagebox.showinfo(
+                "Proceso Completado",
+                f"Avance de ciclo finalizado:\n\n"
+                f"✓ {promoted} estudiante(s) promovido(s) al siguiente semestre.\n"
+                f"⚠ {reprobados_added} estudiante(s) con promedio ≤ 11 enviados a 'REPROBADOS'.\n"
+                f"🧹 Se han limpiado las notas y unidades anteriores para el nuevo ciclo.\n\n"
+                f"Se ha abierto la sección 'Reprobados' para su evaluación y regularización."
+            )
+        else:
+            messagebox.showinfo(
+                "Proceso Completado",
+                f"¡Todos los {promoted} estudiantes aprobaron con ≥ 12 y fueron promovidos exitosamente!\n"
+                f"🧹 Notas y unidades limpiadas para el nuevo ciclo."
+            )
+
+    def update_reprobados_sidebar(self):
+        try:
+            reprobados = select_reprobados()
+            self.has_reprobados = len(reprobados) > 0
+            if hasattr(self, "tabview") and "Reprobados" in self.tabview.buttons:
+                count_str = f" ({len(reprobados)})" if len(reprobados) > 0 else ""
+                self.tabview.buttons["Reprobados"].configure(
+                    text=f"   ⚠  REPROBADOS{count_str}"
+                )
+                self.tabview._repack_buttons()
+        except Exception:
+            pass
+
+    def _build_reprobados_tab(self):
+        tab = self.tabview.tab("Reprobados")
+        tab.configure(fg_color="#0e0a11")
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(0, weight=0)
+        tab.grid_rowconfigure(1, weight=1)
+
+        # Header Frame con tonalidad rojiza distinguible
+        header_frame = ctk.CTkFrame(tab, fg_color="#1c1119", corner_radius=12, height=75, border_width=1, border_color="#3a1c2a")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 8))
+        header_frame.grid_propagate(False)
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.grid_columnconfigure(1, weight=0)
+
+        title_f = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_f.grid(row=0, column=0, sticky="w", padx=16, pady=10)
+
+        ctk.CTkLabel(
+            title_f,
+            text="⚠  CONTROL DE REPROBADOS",
+            font=("Arial", 16, "bold"),
+            text_color="#ff5e62",
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            title_f,
+            text="Gestión de recuperación académica, regularización y repetición por semestre",
+            font=("Arial", 11),
+            text_color="#a88d99",
+        ).pack(anchor="w")
+
+        self.reprobados_badge_label = ctk.CTkLabel(
+            header_frame,
+            text="0 REPROBADOS",
+            font=("Arial", 11, "bold"),
+            text_color="#ff5e62",
+            fg_color="#331422",
+            corner_radius=8,
+            padx=12,
+            pady=6,
+        )
+        self.reprobados_badge_label.grid(row=0, column=1, sticky="e", padx=16, pady=10)
+
+        # Body Container
+        body_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        body_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+        body_frame.grid_columnconfigure(0, weight=2)
+        body_frame.grid_columnconfigure(1, weight=3)
+        body_frame.grid_rowconfigure(0, weight=1)
+
+        # Panel izquierdo: Tarjetas de semestres
+        self.reprobados_left_panel = ctk.CTkFrame(body_frame, fg_color="#180e15", corner_radius=12, border_width=1, border_color="#2b1521")
+        self.reprobados_left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        ctk.CTkLabel(
+            self.reprobados_left_panel,
+            text="SEMESTRES CON REPROBADOS",
+            font=("Arial", 12, "bold"),
+            text_color="#ffffff",
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(16, 2))
+
+        ctk.CTkLabel(
+            self.reprobados_left_panel,
+            text="Selecciona un semestre para ver su lista y evaluar",
+            font=("Arial", 10),
+            text_color="#a88d99",
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(0, 12))
+
+        self.reprobados_semesters_scroll = ctk.CTkScrollableFrame(self.reprobados_left_panel, fg_color="transparent")
+        self.reprobados_semesters_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        # Panel derecho: Detalle y evaluación
+        self.reprobados_detail_container = ctk.CTkFrame(body_frame, fg_color="#180e15", corner_radius=12, border_width=1, border_color="#2b1521")
+        self.reprobados_detail_container.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        self._show_reprobados_empty_state("Selecciona un semestre a la izquierda\npara evaluar o gestionar a los reprobados.")
+
+    def refresh_reprobados_tab(self):
+        self.render_reprobados_semesters()
+        if self.selected_reprobado_sem_id:
+            self.render_reprobados_detail(self.selected_reprobado_sem_id)
+
+    def _show_reprobados_empty_state(self, message):
+        for w in self.reprobados_detail_container.winfo_children():
+            w.destroy()
+        lbl = ctk.CTkLabel(
+            self.reprobados_detail_container,
+            text=message,
+            font=("Arial", 12),
+            text_color="#a88d99",
+            justify="center",
+        )
+        lbl.pack(expand=True, pady=100)
+
+    def render_reprobados_semesters(self):
+        for w in self.reprobados_semesters_scroll.winfo_children():
+            w.destroy()
+
+        reprobados = select_reprobados()
+        self.reprobados_badge_label.configure(text=f"{len(reprobados)} REPROBADOS")
+        if not reprobados:
+            lbl = ctk.CTkLabel(
+                self.reprobados_semesters_scroll,
+                text="No hay estudiantes reprobados.",
+                font=("Arial", 11),
+                text_color="#a88d99",
+            )
+            lbl.pack(pady=40)
+            self._show_reprobados_empty_state("¡No hay estudiantes reprobados en el sistema!\nTodos están al día.")
+            return
+
+        sem_groups = {}
+        for r in reprobados:
+            s_id = r["id_semestre_periodo"]
+            if s_id not in sem_groups:
+                sem_groups[s_id] = {
+                    "label": f"Semestre {r['numero_semestre']} - Periodo {r['numero_periodo']}",
+                    "short": f"{r['numero_semestre']}.{r['numero_periodo']}",
+                    "count": 0,
+                    "items": []
+                }
+            sem_groups[s_id]["count"] += 1
+            sem_groups[s_id]["items"].append(r)
+
+        for sem_id, info in sem_groups.items():
+            is_selected = (self.selected_reprobado_sem_id == sem_id)
+            card_bg = "#351524" if is_selected else "#22111c"
+            border_c = "#ff5e62" if is_selected else "#361828"
+
+            card = ctk.CTkFrame(
+                self.reprobados_semesters_scroll,
+                fg_color=card_bg,
+                corner_radius=10,
+                border_width=1,
+                border_color=border_c,
+                cursor="hand2",
+            )
+            card.pack(fill="x", padx=4, pady=4)
+
+            top_f = ctk.CTkFrame(card, fg_color="transparent")
+            top_f.pack(fill="x", padx=12, pady=(10, 8))
+
+            lbl_title = ctk.CTkLabel(
+                top_f,
+                text=f"📚 {info['label']}",
+                font=("Arial", 12, "bold"),
+                text_color="#ffffff",
+                anchor="w",
+            )
+            lbl_title.pack(side="left")
+
+            badge = ctk.CTkLabel(
+                top_f,
+                text=f"{info['count']} Alumnos",
+                font=("Arial", 10, "bold"),
+                text_color="#ff5e62",
+                fg_color="#441829",
+                corner_radius=6,
+                padx=8,
+                pady=2,
+            )
+            badge.pack(side="right")
+
+            for widget in (card, top_f, lbl_title, badge):
+                widget.bind("<Button-1>", lambda e, s=sem_id: self.on_select_reprobado_semester(s))
+
+        if self.selected_reprobado_sem_id not in sem_groups:
+            first_sem = list(sem_groups.keys())[0]
+            self.on_select_reprobado_semester(first_sem)
+
+    def on_select_reprobado_semester(self, sem_id):
+        self.selected_reprobado_sem_id = sem_id
+        self.selected_reprobado_student_id = None
+        self.render_reprobados_semesters()
+        self.render_reprobados_detail(sem_id)
+
+    def render_reprobados_detail(self, sem_id):
+        for w in self.reprobados_detail_container.winfo_children():
+            w.destroy()
+
+        reprobados = select_reprobados()
+        sem_students = [r for r in reprobados if r["id_semestre_periodo"] == sem_id]
+        if not sem_students:
+            self._show_reprobados_empty_state("No quedan estudiantes reprobados en este semestre.")
+            return
+
+        sem_label = f"Semestre {sem_students[0]['numero_semestre']} - Periodo {sem_students[0]['numero_periodo']}"
+        num_cont = self.reprobados_num_contenidos.get(sem_id, sem_students[0]["num_contenidos"] or 0)
+
+        # Header Frame de la sección
+        header_f = ctk.CTkFrame(self.reprobados_detail_container, fg_color="transparent")
+        header_f.pack(fill="x", padx=16, pady=(14, 8))
+
+        left_h = ctk.CTkFrame(header_f, fg_color="transparent")
+        left_h.pack(side="left")
+
+        ctk.CTkLabel(
+            left_h,
+            text=f"REPROBADOS: {sem_label.upper()}",
+            font=("Arial", 13, "bold"),
+            text_color="#ffffff",
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            left_h,
+            text=f"{len(sem_students)} estudiante(s) en recuperación",
+            font=("Arial", 10),
+            text_color="#a88d99",
+        ).pack(anchor="w")
+
+        right_h = ctk.CTkFrame(header_f, fg_color="transparent")
+        right_h.pack(side="right")
+
+        btn_delete_all = ctk.CTkButton(
+            right_h,
+            text="🗑  BORRARLOS IRREMEDIABLEMENTE",
+            command=self.delete_all_reprobados_in_current_semester,
+            fg_color="#c0392b",
+            hover_color="#e74c3c",
+            text_color="#ffffff",
+            font=("Arial", 10, "bold"),
+            height=32,
+            corner_radius=8,
+        )
+        btn_delete_all.pack(side="left", padx=(0, 8))
+
+        btn_eval = ctk.CTkButton(
+            right_h,
+            text=f"📝  CONFIGURAR EVALUACIÓN{f' ({num_cont} CONT.)' if num_cont > 0 else ''}",
+            command=self.start_reprobados_evaluation,
+            fg_color="#0fbcf9",
+            hover_color="#00a8e8",
+            text_color="#0d0e1a",
+            font=("Arial", 10, "bold"),
+            height=32,
+            corner_radius=8,
+        )
+        btn_eval.pack(side="left")
+
+        # Body con layout Master-Detail (igual que en Notas)
+        body_eval_frame = ctk.CTkFrame(self.reprobados_detail_container, fg_color="transparent")
+        body_eval_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        body_eval_frame.grid_columnconfigure(0, weight=2)
+        body_eval_frame.grid_columnconfigure(1, weight=3)
+        body_eval_frame.grid_rowconfigure(0, weight=1)
+
+        # ── SUBPANEL IZQUIERDO: Directorio de estudiantes reprobados
+        st_left_panel = ctk.CTkFrame(body_eval_frame, fg_color="#140c12", corner_radius=10, border_width=1, border_color="#2b1521")
+        st_left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+
+        ctk.CTkLabel(
+            st_left_panel,
+            text="ESTUDIANTES EN RECUPERACIÓN",
+            font=("Arial", 11, "bold"),
+            text_color="#ffffff",
+            anchor="w"
+        ).pack(fill="x", padx=12, pady=(12, 2))
+
+        ctk.CTkLabel(
+            st_left_panel,
+            text="Selecciona un estudiante para evaluarlo",
+            font=("Arial", 9),
+            text_color="#a88d99",
+            anchor="w"
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        self.reprobados_student_scroll = ctk.CTkScrollableFrame(st_left_panel, fg_color="transparent")
+        self.reprobados_student_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 6))
+
+        # ── SUBPANEL DERECHO: Detalle de evaluación del estudiante
+        self.reprobado_student_eval_container = ctk.CTkFrame(body_eval_frame, fg_color="#140c12", corner_radius=10, border_width=1, border_color="#2b1521")
+        self.reprobado_student_eval_container.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        # Renderizar la lista de tarjetas de estudiantes en la izquierda
+        self.render_reprobados_students_list(sem_id, sem_students)
+
+        # Si no hay estudiante seleccionado, seleccionar al primero por defecto
+        if not getattr(self, "selected_reprobado_student_id", None) or not any(st["id_estudiante"] == self.selected_reprobado_student_id for st in sem_students):
+            self.selected_reprobado_student_id = sem_students[0]["id_estudiante"]
+
+        self.render_reprobado_student_evaluation(self.selected_reprobado_student_id, sem_id)
+
+    def render_reprobados_students_list(self, sem_id, sem_students):
+        for w in self.reprobados_student_scroll.winfo_children():
+            w.destroy()
+
+        for st in sem_students:
+            s_id = st["id_estudiante"]
+            is_selected = (getattr(self, "selected_reprobado_student_id", None) == s_id)
+            card_bg = "#2d1320" if is_selected else "#1a0d16"
+            border_c = "#ff5e62" if is_selected else "#2c1523"
+            border_w = 1 if is_selected else 0
+
+            # Calcular promedio actual de recuperación
+            avg = self.get_student_reprobado_average(s_id, sem_id)
+            badge_bg = "#0f3a20" if avg >= 12.0 else ("#3d1e1e" if avg > 0 else "#1c1e2f")
+            badge_fg = "#00e676" if avg >= 12.0 else ("#ff4757" if avg > 0 else "#8c8da5")
+
+            card = ctk.CTkFrame(
+                self.reprobados_student_scroll,
+                fg_color=card_bg,
+                corner_radius=8,
+                border_width=border_w,
+                border_color=border_c,
+                cursor="hand2",
+            )
+            card.pack(fill="x", padx=4, pady=3)
+
+            top_f = ctk.CTkFrame(card, fg_color="transparent")
+            top_f.pack(fill="x", padx=10, pady=8)
+
+            info_f = ctk.CTkFrame(top_f, fg_color="transparent")
+            info_f.pack(side="left", fill="both", expand=True)
+
+            name_lbl = ctk.CTkLabel(
+                info_f,
+                text=f"{st['nombres']} {st['apellidos']}".upper(),
+                font=("Arial", 11, "bold"),
+                text_color="#ffffff",
+                anchor="w",
+            )
+            name_lbl.pack(anchor="w")
+
+            ci_lbl = ctk.CTkLabel(
+                info_f,
+                text=f"CI: {st['ci']} · Nota Previa: {st['nota_previa']:.2f}",
+                font=("Arial", 9),
+                text_color="#a88d99",
+                anchor="w",
+            )
+            ci_lbl.pack(anchor="w")
+
+            badge = ctk.CTkLabel(
+                top_f,
+                text=f"{avg:.2f}",
+                font=("Arial", 10, "bold"),
+                text_color=badge_fg,
+                fg_color=badge_bg,
+                corner_radius=6,
+                padx=8,
+                pady=2,
+            )
+            badge.pack(side="right")
+
+            for widget in (card, top_f, info_f, name_lbl, ci_lbl, badge):
+                widget.bind("<Button-1>", lambda e, sid=s_id: self.on_select_reprobado_student(sid, sem_id))
+
+    def on_select_reprobado_student(self, student_id, sem_id):
+        self.selected_reprobado_student_id = student_id
+        reprobados = select_reprobados()
+        sem_students = [r for r in reprobados if r["id_semestre_periodo"] == sem_id]
+        self.render_reprobados_students_list(sem_id, sem_students)
+        self.render_reprobado_student_evaluation(student_id, sem_id)
+
+    def get_student_reprobado_average(self, student_id, sem_id):
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT num_contenidos FROM reprobados WHERE id_estudiante = ?", (student_id,))
+        r_row = c.fetchone()
+        num_cont = r_row["num_contenidos"] if r_row and r_row["num_contenidos"] else 0
+        if num_cont <= 0:
+            c.execute("SELECT COUNT(*) FROM reprobados_contenidos WHERE id_semestre_periodo = ?", (sem_id,))
+            num_cont = c.fetchone()[0]
+
+        if num_cont <= 0:
+            conn.close()
+            return 0.0
+
+        c.execute("SELECT SUM(nota) FROM reprobados_notas WHERE id_estudiante = ?", (student_id,))
+        total_grade = c.fetchone()[0] or 0.0
+        conn.close()
+
+        avg = round(total_grade / num_cont, 2)
+        return avg
+
+    def render_reprobado_student_evaluation(self, student_id, sem_id):
+        for w in self.reprobado_student_eval_container.winfo_children():
+            w.destroy()
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT id_estudiantes, nombres, apellidos, ci FROM estudiantes WHERE id_estudiantes = ?", (student_id,))
+        student = c.fetchone()
+
+        c.execute("SELECT nota_previa, num_contenidos FROM reprobados WHERE id_estudiante = ?", (student_id,))
+        rep_info = c.fetchone()
+
+        c.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (sem_id,))
+        sem_info = c.fetchone()
+        conn.close()
+
+        if not student or not rep_info:
+            lbl = ctk.CTkLabel(self.reprobado_student_eval_container, text="No se encontró la información del estudiante.", text_color="#a88d99")
+            lbl.pack(pady=40)
+            return
+
+        sem_label = f"{sem_info['numero_semestre']}.{sem_info['numero_periodo']}" if sem_info else f"ID {sem_id}"
+        num_cont = self.reprobados_num_contenidos.get(sem_id, rep_info["num_contenidos"] or 0)
+        nota_prev = rep_info["nota_previa"]
+
+        # Promedio actual de recuperación
+        avg = self.get_student_reprobado_average(student_id, sem_id)
+        avg_badge_bg = "#0f3a20" if avg >= 12.0 else ("#3d1e1e" if avg > 0 else "#1c1e2f")
+        avg_badge_fg = "#00e676" if avg >= 12.0 else ("#ff4757" if avg > 0 else "#8c8da5")
+
+        # ── 1. CABECERA DEL ESTUDIANTE ──────────────────────────────────────
+        header_card = ctk.CTkFrame(self.reprobado_student_eval_container, fg_color="#1c1119", corner_radius=10, border_width=1, border_color="#361828")
+        header_card.pack(fill="x", padx=12, pady=(12, 6))
+
+        info_sub = ctk.CTkFrame(header_card, fg_color="transparent")
+        info_sub.pack(side="left", padx=14, pady=10)
+
+        ctk.CTkLabel(
+            info_sub,
+            text=f"👤  {student['nombres']} {student['apellidos']}".upper(),
+            font=("Arial", 13, "bold"),
+            text_color="#ffffff",
+            anchor="w",
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            info_sub,
+            text=f"CI: {student['ci']}  •  Semestre {sem_label}  •  Nota Previa: {nota_prev:.2f}",
+            font=("Arial", 10),
+            text_color="#a88d99",
+            anchor="w",
+        ).pack(anchor="w")
+
+        # Badge de Definitiva a la derecha
+        badge_header = ctk.CTkFrame(header_card, fg_color=avg_badge_bg, corner_radius=8, height=34, width=68)
+        badge_header.pack(side="right", padx=(0, 14), pady=10)
+        badge_header.pack_propagate(False)
+
+        ctk.CTkLabel(
+            badge_header,
+            text=f"{avg:.2f}",
+            font=("Arial", 11, "bold"),
+            text_color=avg_badge_fg,
+        ).pack(fill="both", expand=True)
+
+        # Botón de acción (Aprobar o Repetir) a la izquierda de la insignia
+        if avg >= 12.0:
+            btn_action = ctk.CTkButton(
+                header_card,
+                text="✓  APROBAR",
+                command=lambda sid=student_id, sc=sem_id: self.approve_reprobado_student(sid, sc),
+                fg_color="#00e676",
+                hover_color="#00c853",
+                text_color="#0d0e1a",
+                font=("Arial", 10, "bold"),
+                width=100,
+                height=32,
+                corner_radius=6,
+            )
+        else:
+            btn_action = ctk.CTkButton(
+                header_card,
+                text="✗  REPETIR EL SEMESTRE",
+                command=lambda sid=student_id: self.repeat_reprobado_student(sid),
+                fg_color="#ff4757",
+                hover_color="#d63031",
+                text_color="#ffffff",
+                font=("Arial", 10, "bold"),
+                width=150,
+                height=32,
+                corner_radius=6,
+            )
+        btn_action.pack(side="right", padx=(0, 10), pady=10)
+
+        # ── 2. LISTA DE CONTENIDOS ──────────────────────────────────────────
+        contenidos = get_reprobados_contenidos(sem_id)
+        if not contenidos or num_cont <= 0:
+            no_cont_frame = ctk.CTkFrame(self.reprobado_student_eval_container, fg_color="#180e15", corner_radius=10)
+            no_cont_frame.pack(fill="both", expand=True, padx=12, pady=6)
+            ctk.CTkLabel(
+                no_cont_frame,
+                text="No hay contenidos de evaluación configurados para este semestre.\n\nHaz clic en 'CONFIGURAR EVALUACIÓN' arriba para definir la cantidad de contenidos.",
+                font=("Arial", 11),
+                text_color="#a88d99",
+                justify="center",
+            ).pack(expand=True, pady=40)
+            return
+
+        grades_scroll = ctk.CTkScrollableFrame(self.reprobado_student_eval_container, fg_color="transparent", height=180)
+        grades_scroll.pack(fill="both", expand=True, padx=12, pady=4)
+
+        student_grades = get_reprobado_grades(student_id)
+
+        for cont in contenidos:
+            c_num = cont["num_contenido"]
+            c_name = cont["nombre_contenido"]
+            c_ctx = cont["contexto"] or "Sin descripción"
+
+            card = ctk.CTkFrame(grades_scroll, fg_color="#1c1119", corner_radius=8, border_width=1, border_color="#361828")
+            card.pack(fill="x", padx=4, pady=4)
+
+            top_row = ctk.CTkFrame(card, fg_color="transparent")
+            top_row.pack(fill="x", padx=12, pady=8)
+
+            left_c = ctk.CTkFrame(top_row, fg_color="transparent")
+            left_c.pack(side="left", fill="both", expand=True)
+
+            ctk.CTkLabel(
+                left_c,
+                text=f"📌 {c_name}",
+                font=("Arial", 11, "bold"),
+                text_color="#ffffff",
+                anchor="w",
+            ).pack(anchor="w")
+
+            ctk.CTkLabel(
+                left_c,
+                text=f"{c_ctx}",
+                font=("Arial", 9),
+                text_color="#a88d99",
+                anchor="w",
+                wraplength=340,
+                justify="left",
+            ).pack(anchor="w", pady=(2, 0))
+
+            # Si tiene comentarios grabados
+            st_data = student_grades.get(c_num)
+            if st_data and st_data.get("comentarios"):
+                ctk.CTkLabel(
+                    left_c,
+                    text=f"Comentario: {st_data['comentarios']}",
+                    font=("Arial", 8, "italic"),
+                    text_color="#0fbcf9",
+                    anchor="w",
+                ).pack(anchor="w", pady=(2, 0))
+
+            right_c = ctk.CTkFrame(top_row, fg_color="transparent")
+            right_c.pack(side="right")
+
+            # Botón Editar Contenido
+            btn_edit_c = ctk.CTkButton(
+                right_c,
+                text="✏  Editar",
+                command=lambda cn=c_num, cnm=c_name, ccx=c_ctx: self.show_edit_reprobado_contenido_modal(sem_id, cn, cnm, ccx, student_id),
+                fg_color="#2b1521",
+                hover_color="#3e1d30",
+                text_color="#0fbcf9",
+                font=("Arial", 9, "bold"),
+                width=70,
+                height=26,
+                corner_radius=6,
+            )
+            btn_edit_c.pack(side="left", padx=(0, 8))
+
+            # Insignia de Nota
+            if st_data is not None and st_data.get("nota") is not None:
+                n_val = float(st_data["nota"])
+                n_bg = "#0f3a20" if n_val >= 12.0 else "#3d1e1e"
+                n_fg = "#00e676" if n_val >= 12.0 else "#ff4757"
+                badge_lbl = ctk.CTkLabel(
+                    right_c,
+                    text=f"Nota: {n_val:.2f}",
+                    font=("Arial", 10, "bold"),
+                    text_color=n_fg,
+                    fg_color=n_bg,
+                    corner_radius=6,
+                    padx=8,
+                    pady=4,
+                )
+                badge_lbl.pack(side="left", padx=(0, 6))
+
+                # Botón de eliminar nota individual
+                btn_del_grade = ctk.CTkButton(
+                    right_c,
+                    text="🗑",
+                    command=lambda cn=c_num: self.delete_reprobado_grade_action(student_id, cn, sem_id),
+                    fg_color="#3a1c2a",
+                    hover_color="#52263b",
+                    text_color="#ff5e62",
+                    font=("Arial", 10),
+                    width=28,
+                    height=26,
+                    corner_radius=6,
+                )
+                btn_del_grade.pack(side="left")
+            else:
+                badge_lbl = ctk.CTkLabel(
+                    right_c,
+                    text="Sin calificar",
+                    font=("Arial", 9),
+                    text_color="#8c8da5",
+                    fg_color="#180e15",
+                    corner_radius=6,
+                    padx=8,
+                    pady=4,
+                )
+                badge_lbl.pack(side="left")
+
+        # ── 3. FORMULARIO REGISTRAR / ACTUALIZAR CALIFICACIÓN ───────────────
+        form_card = ctk.CTkFrame(self.reprobado_student_eval_container, fg_color="#1c1119", corner_radius=10, border_width=1, border_color="#361828")
+        form_card.pack(fill="x", padx=12, pady=(4, 12))
+
+        ctk.CTkLabel(
+            form_card,
+            text="REGISTRAR / ACTUALIZAR CALIFICACIÓN DE RECUPERACIÓN",
+            font=("Arial", 10, "bold"),
+            text_color="#0fbcf9",
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(10, 6))
+
+        inputs_f = ctk.CTkFrame(form_card, fg_color="transparent")
+        inputs_f.pack(fill="x", padx=12, pady=(0, 10))
+
+        # Selector de contenido
+        ctk.CTkLabel(inputs_f, text="Contenido:", font=("Arial", 9, "bold"), text_color="#a88d99").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
+        cont_options = [f"{c['num_contenido']}. {c['nombre_contenido']}" for c in contenidos]
+        self.rep_eval_cont_var = tk.StringVar(value=cont_options[0] if cont_options else "")
+        self.rep_eval_cont_menu = ctk.CTkOptionMenu(
+            inputs_f,
+            values=cont_options,
+            variable=self.rep_eval_cont_var,
+            fg_color="#2b1521",
+            button_color="#3e1d30",
+            font=("Arial", 10),
+            height=28,
+            width=160,
+            dynamic_resizing=False,
+        )
+        self.rep_eval_cont_menu.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=4)
+
+        # Entrada de nota
+        ctk.CTkLabel(inputs_f, text="Nota (0-20):", font=("Arial", 9, "bold"), text_color="#a88d99").grid(row=0, column=2, sticky="w", padx=(0, 6), pady=4)
+        self.rep_eval_grade_entry = ctk.CTkEntry(
+            inputs_f,
+            font=("Arial", 10),
+            fg_color="#120910",
+            text_color="#ffffff",
+            border_color="#441a2a",
+            width=65,
+            height=28,
+            placeholder_text="Ej: 14"
+        )
+        self.rep_eval_grade_entry.grid(row=0, column=3, sticky="w", padx=(0, 12), pady=4)
+
+        # Entrada de comentario
+        ctk.CTkLabel(inputs_f, text="Comentario:", font=("Arial", 9, "bold"), text_color="#a88d99").grid(row=0, column=4, sticky="w", padx=(0, 6), pady=4)
+        self.rep_eval_comment_entry = ctk.CTkEntry(
+            inputs_f,
+            font=("Arial", 10),
+            fg_color="#120910",
+            text_color="#ffffff",
+            border_color="#441a2a",
+            width=140,
+            height=28,
+            placeholder_text="Opcional"
+        )
+        self.rep_eval_comment_entry.grid(row=0, column=5, sticky="ew", padx=(0, 10), pady=4)
+        inputs_f.grid_columnconfigure(5, weight=1)
+
+        # Botón Guardar
+        btn_save = ctk.CTkButton(
+            inputs_f,
+            text="💾  GUARDAR",
+            command=lambda sid=student_id, sc=sem_id: self.save_reprobado_grade_from_form(sid, sc),
+            fg_color="#6c5ce7",
+            hover_color="#5b4bc4",
+            text_color="#ffffff",
+            font=("Arial", 10, "bold"),
+            width=90,
+            height=28,
+            corner_radius=6,
+        )
+        btn_save.grid(row=0, column=6, sticky="e", padx=(0, 0), pady=4)
+
+    def save_reprobado_grade_from_form(self, student_id, sem_id):
+        selected_text = self.rep_eval_cont_var.get()
+        if not selected_text:
+            messagebox.showwarning("Calificación", "Selecciona un contenido a evaluar.")
+            return
+
+        try:
+            num_contenido = int(selected_text.split(".")[0].strip())
+        except (ValueError, IndexError):
+            messagebox.showwarning("Calificación", "Contenido no válido.")
+            return
+
+        grade_str = self.rep_eval_grade_entry.get().strip().replace(",", ".")
+        try:
+            grade_val = float(grade_str)
+            if grade_val < 0.0 or grade_val > 20.0:
+                messagebox.showwarning("Calificación", "La calificación debe estar comprendida entre 0 y 20.")
+                return
+        except ValueError:
+            messagebox.showwarning("Calificación", "Ingresa una calificación válida (número entre 0 y 20).")
+            return
+
+        comment_str = self.rep_eval_comment_entry.get().strip()
+        save_reprobado_grade(student_id, num_contenido, grade_val, comment_str)
+
+        # Refrescar vista
+        reprobados = select_reprobados()
+        sem_students = [r for r in reprobados if r["id_semestre_periodo"] == sem_id]
+        self.render_reprobados_students_list(sem_id, sem_students)
+        self.render_reprobado_student_evaluation(student_id, sem_id)
+
+    def show_edit_reprobado_contenido_modal(self, sem_id, num_contenido, current_name, current_ctx, student_id):
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Editar Contenido {num_contenido}")
+        modal.geometry("440x360")
+        modal.resizable(False, False)
+        modal.configure(fg_color="#180e15")
+
+        try:
+            modal.grab_set()
+            modal.lift()
+            modal.focus_force()
+        except Exception:
+            pass
+
+        ctk.CTkLabel(
+            modal,
+            text=f"EDITAR CONTENIDO {num_contenido}".upper(),
+            font=("Arial", 14, "bold"),
+            text_color="#ff5e62",
+        ).pack(pady=(20, 12))
+
+        # Nombre del contenido
+        ctk.CTkLabel(modal, text="Nombre del Contenido:", font=("Arial", 10, "bold"), text_color="#a88d99").pack(anchor="w", padx=28, pady=(4, 2))
+        name_entry = ctk.CTkEntry(
+            modal,
+            font=("Arial", 11),
+            fg_color="#120910",
+            text_color="#ffffff",
+            border_color="#441a2a",
+            height=32,
+        )
+        name_entry.insert(0, current_name)
+        name_entry.pack(fill="x", padx=28, pady=(0, 10))
+
+        # Contexto del contenido
+        ctk.CTkLabel(modal, text="Contexto / Temas de Evaluación:", font=("Arial", 10, "bold"), text_color="#a88d99").pack(anchor="w", padx=28, pady=(4, 2))
+        ctx_box = ctk.CTkTextbox(
+            modal,
+            font=("Arial", 11),
+            fg_color="#120910",
+            text_color="#ffffff",
+            border_color="#441a2a",
+            border_width=1,
+            height=100,
+        )
+        ctx_box.insert("1.0", current_ctx)
+        ctx_box.pack(fill="x", padx=28, pady=(0, 16))
+
+        def save_changes():
+            new_name = name_entry.get().strip() or f"Contenido {num_contenido}"
+            new_ctx = ctx_box.get("1.0", "end-1c").strip()
+            update_reprobado_contenido(sem_id, num_contenido, new_name, new_ctx)
+            modal.destroy()
+            self.render_reprobado_student_evaluation(student_id, sem_id)
+
+        btn_f = ctk.CTkFrame(modal, fg_color="transparent")
+        btn_f.pack(fill="x", padx=28, pady=(4, 16))
+
+        ctk.CTkButton(
+            btn_f,
+            text="Cancelar",
+            command=modal.destroy,
+            fg_color="#2b1521",
+            hover_color="#3e1d30",
+            text_color="#a88d99",
+            width=100,
+            height=32,
+            corner_radius=8,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btn_f,
+            text="💾  Guardar Cambios",
+            command=save_changes,
+            fg_color="#0fbcf9",
+            hover_color="#00a8e8",
+            text_color="#0d0e1a",
+            font=("Arial", 11, "bold"),
+            width=150,
+            height=32,
+            corner_radius=8,
+        ).pack(side="right")
+
+    def delete_reprobado_grade_action(self, student_id, num_contenido, sem_id):
+        if not messagebox.askyesno("Eliminar Calificación", f"¿Deseas eliminar la calificación del Contenido {num_contenido}?"):
+            return
+        delete_reprobado_single_grade(student_id, num_contenido)
+        reprobados = select_reprobados()
+        sem_students = [r for r in reprobados if r["id_semestre_periodo"] == sem_id]
+        self.render_reprobados_students_list(sem_id, sem_students)
+        self.render_reprobado_student_evaluation(student_id, sem_id)
+
+    def start_reprobados_evaluation(self):
+        if not self.selected_reprobado_sem_id:
+            return
+        current_n = self.reprobados_num_contenidos.get(self.selected_reprobado_sem_id, 3)
+        ans = simpledialog.askinteger(
+            "Configurar Evaluación de Reprobados",
+            "Ingresa el número de contenidos a evaluar para los reprobados (1 a 10):",
+            parent=self,
+            minvalue=1,
+            maxvalue=10,
+            initialvalue=current_n if current_n > 0 else 3
+        )
+        if ans:
+            self.reprobados_num_contenidos[self.selected_reprobado_sem_id] = ans
+            set_reprobado_evaluation_contents(self.selected_reprobado_sem_id, ans)
+            self.render_reprobados_detail(self.selected_reprobado_sem_id)
+
+    def approve_reprobado_student(self, student_id, sem_id):
+        next_sem_id = get_or_create_next_semester(sem_id)
+        promote_student(student_id, next_sem_id)
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (next_sem_id,))
+        nrow = c.fetchone()
+        conn.close()
+        nxt_label = f"{nrow['numero_semestre']}.{nrow['numero_periodo']}" if nrow else "siguiente"
+
+        messagebox.showinfo(
+            "Estudiante Aprobado",
+            f"¡El estudiante ha aprobado con éxito!\nHa sido promovido al Semestre {nxt_label} con sus notas limpias para el nuevo ciclo."
+        )
+
+        self.selected_reprobado_student_id = None
+        self.update_reprobados_sidebar()
+        self.refresh_notes_student_menu()
+        self.refresh_student_list()
+        self.refresh_reprobados_tab()
+
+    def repeat_reprobado_student(self, student_id):
+        confirm = messagebox.askyesno(
+            "Repetir Semestre",
+            "¿Confirmas que el estudiante repetirá el semestre?\nSus calificaciones se reiniciarán para cursarlo nuevamente."
+        )
+        if not confirm:
+            return
+
+        repeat_student_semester(student_id)
+        messagebox.showinfo(
+            "Repetir Semestre",
+            "El estudiante repetirá su semestre actual con calificaciones limpias."
+        )
+
+        self.selected_reprobado_student_id = None
+        self.update_reprobados_sidebar()
+        self.refresh_notes_student_menu()
+        self.refresh_student_list()
+        self.refresh_reprobados_tab()
+
+    def delete_all_reprobados_in_current_semester(self):
+        if not self.selected_reprobado_sem_id:
+            return
+
+        reprobados = select_reprobados()
+        sem_students = [r for r in reprobados if r["id_semestre_periodo"] == self.selected_reprobado_sem_id]
+        if not sem_students:
+            return
+
+        confirm = messagebox.askyesno(
+            "Eliminar Reprobados",
+            f"¿Estás SEGURO de eliminar irremediablemente a todos los {len(sem_students)} estudiantes reprobados de este semestre?\n\n"
+            "Esta acción los eliminará permanentemente de todo el sistema y no se puede deshacer.",
+            icon="warning"
+        )
+        if not confirm:
+            return
+
+        s_ids = [r["id_estudiante"] for r in sem_students]
+        delete_reprobados_permanently(s_ids)
+
+        messagebox.showinfo("Eliminados", f"Se han eliminado irremediablemente {len(s_ids)} estudiantes.")
+        self.selected_reprobado_student_id = None
+        self.selected_reprobado_sem_id = None
+        self.update_reprobados_sidebar()
+        self.refresh_notes_student_menu()
+        self.refresh_student_list()
+        self.refresh_reprobados_tab()
 
     def select_student_for_notes(self, student_id):
         self.selected_note_student_id = student_id
@@ -2027,6 +3131,105 @@ class AttendanceApp(GuiArchitect, ACPMixin):
             self.refresh_notes_student_menu()
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo eliminar la nota: {e}")
+
+    def manual_reprobar_student(self):
+        if not hasattr(self, 'selected_note_student_id') or not self.selected_note_student_id:
+            messagebox.showwarning("Reprobar Estudiante", "Selecciona primero un estudiante para reprobar.")
+            return
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT id_estudiantes, nombres, apellidos, ci, semestre_periodo FROM estudiantes WHERE id_estudiantes = ?", (self.selected_note_student_id,))
+        student = c.fetchone()
+        if not student:
+            conn.close()
+            messagebox.showwarning("Reprobar Estudiante", "No se encontró el estudiante en el sistema.")
+            return
+
+        sem_id = student["semestre_periodo"]
+        c.execute("SELECT numero_semestre, numero_periodo FROM semestre_periodo WHERE id_SemestrePeriodo = ?", (sem_id,))
+        sem_row = c.fetchone()
+        sem_label = f"{sem_row['numero_semestre']}.{sem_row['numero_periodo']}" if sem_row else f"ID {sem_id}"
+
+        # 1. Verificar si la sección tiene contenidos / unidades
+        c.execute("SELECT id_unidad, nombre_unidad, completada FROM unidades WHERE id_semestre_periodo = ?", (sem_id,))
+        units = c.fetchall()
+
+        if not units:
+            conn.close()
+            messagebox.showwarning(
+                "No se puede reprobar",
+                f"No se puede reprobar al estudiante {student['nombres']} {student['apellidos']}:\n\n"
+                f"• Motivo: El Semestre {sem_label} no tiene unidades o contenidos agregados.\n\n"
+                "Para poder reprobar a un estudiante, todos los contenidos de su semestre deben estar creados y marcados como 'Completadas'."
+            )
+            return
+
+        # 2. Verificar que TODOS los contenidos / unidades del semestre estén completados
+        incomplete_units = [u for u in units if not u["completada"] or int(u["completada"]) != 1]
+        if incomplete_units:
+            conn.close()
+            messagebox.showwarning(
+                "No se puede reprobar",
+                f"No se puede reprobar al estudiante {student['nombres']} {student['apellidos']}:\n\n"
+                f"• Motivo: El Semestre {sem_label} aún tiene {len(incomplete_units)} de {len(units)} unidades sin completar.\n\n"
+                "El semestre aún no ha culminado. Para enviar al estudiante a reprobados, todas las unidades de esta sección deben haber sido marcadas como 'Completadas'."
+            )
+            return
+
+        # 3. Verificar calificación definitiva (debe ser <= 11)
+        grade, _ = self.get_student_definitive_grade(self.selected_note_student_id, sem_id)
+        if grade > 11.0:
+            conn.close()
+            messagebox.showwarning(
+                "No se puede reprobar",
+                f"No se puede reprobar al estudiante {student['nombres']} {student['apellidos']}:\n\n"
+                f"• Motivo: Su calificación definitiva es {grade:.2f} (mayor a 11).\n\n"
+                "El estudiante tiene calificación aprobatoria (≥ 12) o superior a 11. Solo se permite reprobar a estudiantes cuya definitiva sea menor o igual a 11 (≤ 11)."
+            )
+            return
+
+        # 4. Confirmación del proceso manual 1 a 1
+        confirm = messagebox.askyesno(
+            "Confirmar Proceso Manual de Reprobación",
+            f"¿Estás seguro de reprobar a este estudiante?\n\n"
+            f"• Estudiante: {student['nombres']} {student['apellidos']} (CI: {student['ci']})\n"
+            f"• Semestre: {sem_label}\n"
+            f"• Calificación Definitiva: {grade:.2f}\n\n"
+            f"El estudiante saldrá de las listas normales de alumnos y entrará al 'limbo', quedando registrado únicamente en la sección especial de 'REPROBADOS'.\n\n"
+            f"¿Proceder?",
+            icon="warning"
+        )
+        if not confirm:
+            conn.close()
+            return
+
+        # Enviar al limbo de reprobados
+        insert_or_update_reprobado(self.selected_note_student_id, sem_id, grade)
+        conn.commit()
+        conn.close()
+
+        student_name = f"{student['nombres']} {student['apellidos']}"
+        self.selected_note_student_id = None
+
+        if hasattr(self, "update_reprobados_sidebar"):
+            self.update_reprobados_sidebar()
+        self.refresh_notes_student_menu()
+        self.refresh_notes_list()
+        if hasattr(self, "refresh_student_list"):
+            self.refresh_student_list()
+        if hasattr(self, "refresh_student_menu"):
+            self.refresh_student_menu()
+        if hasattr(self, "refresh_reprobados_tab"):
+            self.refresh_reprobados_tab()
+        if hasattr(self, "_refresh_dashboard"):
+            self._refresh_dashboard()
+
+        messagebox.showinfo(
+            "Estudiante Reprobado",
+            f"El estudiante {student_name} ha sido reprobado manualmente con éxito.\n\n"
+            f"Ahora se encuentra en el limbo (exclusivamente en la sección 'REPROBADOS')."
+        )
 
     def check_report_button_state(self):
         semester_label = self.notes_semester_filter_var.get() if hasattr(self, 'notes_semester_filter_var') else None
@@ -2276,8 +3479,8 @@ class AttendanceApp(GuiArchitect, ACPMixin):
             student_id = student["id_estudiantes"]
             avg, _ = self.get_student_definitive_grade(student_id, semester_id)
             
-            # Colores del badge según promedio
-            if avg >= 9.5: # Nota aprobatoria estándar
+            # Colores del badge según promedio (≥ 12 aprobatorio)
+            if avg >= 12.0:
                 badge_bg = "#0f3a20"
                 badge_fg = "#00e676"
             elif avg > 0:
@@ -2427,11 +3630,11 @@ class AttendanceApp(GuiArchitect, ACPMixin):
 
         # Nota definitiva en cabecera
         avg, _ = self.get_student_definitive_grade(self.selected_note_student_id, semester_id)
-        avg_badge_bg = "#0f3a20" if avg >= 9.5 else ("#3d1e1e" if avg > 0 else "#1c1e2f")
-        avg_badge_fg = "#00e676" if avg >= 9.5 else ("#ff4757" if avg > 0 else "#8c8da5")
+        avg_badge_bg = "#0f3a20" if avg >= 12.0 else ("#3d1e1e" if avg > 0 else "#1c1e2f")
+        avg_badge_fg = "#00e676" if avg >= 12.0 else ("#ff4757" if avg > 0 else "#8c8da5")
         
         badge_header = ctk.CTkFrame(header_card, fg_color=avg_badge_bg, corner_radius=8, height=36, width=70)
-        badge_header.pack(side="right", padx=16, pady=12)
+        badge_header.pack(side="right", padx=(0, 16), pady=12)
         badge_header.pack_propagate(False)
         
         ctk.CTkLabel(
@@ -2440,6 +3643,21 @@ class AttendanceApp(GuiArchitect, ACPMixin):
             font=("Arial", 12, "bold"),
             text_color=avg_badge_fg
         ).pack(fill="both", expand=True)
+
+        # Botón manual de reprobación individual (proceso 1 a 1)
+        btn_reprobar = ctk.CTkButton(
+            header_card,
+            text="⚠  REPROBAR",
+            command=self.manual_reprobar_student,
+            fg_color="#8a2424",
+            hover_color="#a33030",
+            text_color="#ffffff",
+            font=("Arial", 11, "bold"),
+            width=115,
+            height=34,
+            corner_radius=8,
+        )
+        btn_reprobar.pack(side="right", padx=(0, 12), pady=12)
 
         # ── LISTA DE CALIFICACIONES POR UNIDAD ─────────────────────────────────
         grades_scroll = ctk.CTkScrollableFrame(self.notes_detail_container, fg_color="transparent", height=190)
